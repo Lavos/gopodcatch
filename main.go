@@ -8,8 +8,13 @@ import (
 	"io"
 	"os"
 	"path"
+	"strings"
+	"strconv"
 )
 
+const (
+	MAX_DOWNLOADS = 5
+)
 
 // RSS xml parsing types
 type RSS struct {
@@ -36,11 +41,11 @@ func setupDatabase () {
 
 	conn.Exec("DROP TABLE IF EXISTS feeds")
 	conn.Exec("DROP TABLE IF EXISTS items")
-	conn.Exec("CREATE TABLE feeds (id INTEGER PRIMARY KEY ASC, name TEXT, url TEXT, prefix TEXT)")
+	conn.Exec("CREATE TABLE feeds (id INTEGER PRIMARY KEY ASC, name TEXT, url TEXT)")
 	conn.Exec("CREATE TABLE items (id INTEGER PRIMARY KEY ASC, url TEXT UNIQUE ON CONFLICT IGNORE, downloaded INTEGER DEFAULT 0)")
 
-	conn.Exec("INSERT INTO feeds (name, url, prefix) VALUES ('Retronauts', 'http://retronauts.libsyn.com/rss', 'retro')")
-	conn.Exec("INSERT INTO feeds (name, url, prefix) VALUES ('In-Game Chat', 'http://www.ingamechat.net/?feed=podcast', 'igc')")
+	conn.Exec("INSERT INTO feeds (name, url) VALUES ('Retronauts', 'http://retronauts.libsyn.com/rss')")
+	conn.Exec("INSERT INTO feeds (name, url) VALUES ('In-Game Chat', 'http://www.ingamechat.net/?feed=podcast')")
 	conn.Commit()
 }
 
@@ -107,6 +112,18 @@ func getNewDownloads () {
 	}
 
 	log.Printf("successful ids: %v", successes)
+	id_list := make([]string, 0)
+	for _, id := range successes {
+		id_list = append(id_list, strconv.FormatInt(id, 10))
+	}
+
+	log.Printf("id list: %v", id_list)
+	log.Printf("id list joined: %v", strings.Join(id_list, ","))
+
+	id_err := conn.Exec("UPDATE items SET downloaded = 1 WHERE id IN (?)", strings.Join(id_list, ","))
+
+	log.Printf("id_err: %v", id_err)
+	conn.Commit()
 
 	/* */
 }
