@@ -10,10 +10,11 @@ import (
 	"path"
 	"strings"
 	"strconv"
+	"fmt"
 )
 
 const (
-	MAX_DOWNLOADS = 5
+	MAX_DOWNLOADS = 3
 )
 
 // RSS xml parsing types
@@ -184,7 +185,7 @@ func downloadEnclosure (d *Download, success chan int64, failure chan bool) {
 	}
 
 	_, filename := path.Split(d.URL)
-	out, _ := os.Create(filename)
+	out, _ := os.Create(fmt.Sprintf("./dl/%s", filename))
 	defer out.Close()
 
 	_, dl_err := io.Copy(out, resp.Body)
@@ -199,6 +200,6 @@ func downloadEnclosure (d *Download, success chan int64, failure chan bool) {
 
 func main () {
 	// setupDatabase()
-	// updateItems()
+	updateItems()
 	downloadItems()
 }
