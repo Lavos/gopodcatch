@@ -57,10 +57,10 @@ func setupDatabase () {
 
 
 func updateItems () {
-	var feed_count int
-
+	feed_count := 0
 	items := make([]Item, 0)
-	feed_responses := make(chan []Item)
+	success := make(chan []Item)
+	failure := make(chan bool)
 
 	conn, _ := sqlite3.Open("podcast.db")
 	defer conn.Close()
@@ -71,34 +71,36 @@ func updateItems () {
 		s.Scan(row)
 
 		feed_count++
-		go updateFeed(row["url"].(string), feed_responses)
+		go updateFeed(row["url"].(string), success, failure)
 	}
 
 	log.Printf("feeds found: %v", feed_count)
 
 	for index := 0; index < feed_count; index++ {
-		new_items := <-feed_responses
-		log.Printf("got new items: %v", new_items)
-		items = append(items, new_items...)
+		select {
+			case new_items := <-success:
+				log.Printf("got new items: %v", new_items)
+				items = append(items, new_items...)
+			case <-failure:
+		}
 	}
 
 	log.Printf("items found: %v", len(items))
 
-	/* */
 	for _, item := range items {
-		conn.Exec("INSERT OR IGNORE INTO items (url) VALUES (?)", item.Enclosure.URL)
+		conn.Exec("INSERT items (url) VALUES (?)", item.Enclosure.URL)
 	}
-	/* */
 
 	conn.Commit()
 }
 
-func updateFeed (url string, returnchan chan []Item) {
+func updateFeed (url string, success chan []Item, failure chan bool) {
 	resp, err := http.Get(url)
 	defer resp.Body.Close()
 
 	if err != nil {
-		// handle error
+		failure <- true
+		return
 	}
 
 	decoder := xml.NewDecoder(resp.Body)
@@ -108,15 +110,17 @@ func updateFeed (url string, returnchan chan []Item) {
 
 	if d_err != nil {
 		log.Printf("[decoder error] %v", d_err)
+		failure <- true
+		return
 	}
 
-	returnchan <- rss.Channel.ItemList
+	success <- rss.Channel.ItemList
 }
 
 func downloadItems () {
 	success := make(chan int64)
 	failure := make(chan bool)
-	downloads := make([]*Download, 0)
+	downloads := make([]Download, 0)
 	success_ids := make([]int64, 0)
 
 	conn, _ := sqlite3.Open("podcast.db")
@@ -126,14 +130,19 @@ func downloadItems () {
 
 	for i, err := conn.Query("SELECT url, id FROM items WHERE downloaded = 0"); err == nil; err = i.Next() {
 		i.Scan(row)
-		downloads = append(downloads, &Download{ Id: row["id"].(int64), URL: row["url"].(string) })
+		downloads = append(downloads, Download{ Id: row["id"].(int64), URL: row["url"].(string) })
 	}
 
 	log.Printf("urls: %v", downloads)
 	download_limit := len(downloads)
 
+	if download_limit == 0 {
+		log.Print("No new items found.")
+		return
+	}
+
 	for i := 0; i < MAX_DOWNLOADS; i++ {
-		var d *Download
+		var d Download
 		d, downloads = pop(downloads)
 		go downloadEnclosure(d, success, failure);
 	}
@@ -146,7 +155,7 @@ func downloadItems () {
 		}
 
 		if len(downloads) != 0 {
-			var d *Download
+			var d Download
 			d, downloads = pop(downloads)
 			go downloadEnclosure(d, success, failure)
 		}
@@ -160,20 +169,18 @@ func downloadItems () {
 		id_list = append(id_list, strconv.FormatInt(id, 10))
 	}
 
-	log.Printf("id list: %v", id_list)
-	log.Printf("id list joined: %v", strings.Join(id_list, ","))
-
-	id_err := conn.Exec("UPDATE items SET downloaded = 1 WHERE id IN (?)", strings.Join(id_list, ","))
+	stmt := fmt.Sprintf("UPDATE items SET downloaded = 1 WHERE id IN (%v)", strings.Join(id_list, ","))
+	id_err := conn.Exec(stmt)
 
 	log.Printf("id_err: %v", id_err)
 	conn.Commit()
 }
 
-func pop (list []*Download) (*Download, []*Download) {
+func pop (list []Download) (Download, []Download) {
 	return list[len(list)-1], list[:len(list)-1]
 }
 
-func downloadEnclosure (d *Download, success chan int64, failure chan bool) {
+func downloadEnclosure (d Download, success chan int64, failure chan bool) {
 	resp, err := http.Get(d.URL)
 	defer resp.Body.Close()
 
