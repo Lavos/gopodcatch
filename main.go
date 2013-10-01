@@ -1,16 +1,16 @@
 package main
 
 import (
-	"log"
 	"code.google.com/p/go-sqlite/go1/sqlite3"
 	"encoding/xml"
-	"net/http"
+	"fmt"
 	"io"
+	"log"
+	"net/http"
 	"os"
 	"path"
-	"strings"
 	"strconv"
-	"fmt"
+	"strings"
 )
 
 const (
@@ -26,7 +26,6 @@ type Channel struct {
 	ItemList []Item `xml:"item"`
 }
 
-
 type Item struct {
 	Enclosure Enclosure `xml:"enclosure"`
 }
@@ -35,13 +34,12 @@ type Enclosure struct {
 	URL string `xml:"url,attr"`
 }
 
-
 type Download struct {
-	Id int64
+	Id  int64
 	URL string
 }
 
-func setupDatabase () {
+func setupDatabase() {
 	conn, _ := sqlite3.Open("podcast.db")
 	defer conn.Close()
 
@@ -55,8 +53,7 @@ func setupDatabase () {
 	conn.Commit()
 }
 
-
-func updateItems () {
+func updateItems() {
 	feed_count := 0
 	items := make([]Item, 0)
 	success := make(chan []Item)
@@ -78,10 +75,10 @@ func updateItems () {
 
 	for index := 0; index < feed_count; index++ {
 		select {
-			case new_items := <-success:
-				log.Printf("got new items: %v", new_items)
-				items = append(items, new_items...)
-			case <-failure:
+		case new_items := <-success:
+			log.Printf("got new items: %v", new_items)
+			items = append(items, new_items...)
+		case <-failure:
 		}
 	}
 
@@ -94,7 +91,7 @@ func updateItems () {
 	conn.Commit()
 }
 
-func updateFeed (url string, success chan []Item, failure chan bool) {
+func updateFeed(url string, success chan []Item, failure chan bool) {
 	resp, err := http.Get(url)
 	defer resp.Body.Close()
 
@@ -117,7 +114,7 @@ func updateFeed (url string, success chan []Item, failure chan bool) {
 	success <- rss.Channel.ItemList
 }
 
-func downloadItems () {
+func downloadItems() {
 	success := make(chan int64)
 	failure := make(chan bool)
 	downloads := make([]Download, 0)
@@ -130,7 +127,7 @@ func downloadItems () {
 
 	for i, err := conn.Query("SELECT url, id FROM items WHERE downloaded = 0"); err == nil; err = i.Next() {
 		i.Scan(row)
-		downloads = append(downloads, Download{ Id: row["id"].(int64), URL: row["url"].(string) })
+		downloads = append(downloads, Download{Id: row["id"].(int64), URL: row["url"].(string)})
 	}
 
 	log.Printf("urls: %v", downloads)
@@ -144,14 +141,14 @@ func downloadItems () {
 	for i := 0; i < MAX_DOWNLOADS; i++ {
 		var d Download
 		d, downloads = pop(downloads)
-		go downloadEnclosure(d, success, failure);
+		go downloadEnclosure(d, success, failure)
 	}
 
 	for n := 0; n < download_limit; n++ {
 		select {
-			case id := <-success:
-				success_ids = append(success_ids, id)
-			case <-failure:
+		case id := <-success:
+			success_ids = append(success_ids, id)
+		case <-failure:
 		}
 
 		if len(downloads) != 0 {
@@ -176,11 +173,11 @@ func downloadItems () {
 	conn.Commit()
 }
 
-func pop (list []Download) (Download, []Download) {
+func pop(list []Download) (Download, []Download) {
 	return list[len(list)-1], list[:len(list)-1]
 }
 
-func downloadEnclosure (d Download, success chan int64, failure chan bool) {
+func downloadEnclosure(d Download, success chan int64, failure chan bool) {
 	resp, err := http.Get(d.URL)
 	defer resp.Body.Close()
 
@@ -205,7 +202,7 @@ func downloadEnclosure (d Download, success chan int64, failure chan bool) {
 	success <- d.Id
 }
 
-func main () {
+func main() {
 	// setupDatabase()
 	updateItems()
 	downloadItems()
