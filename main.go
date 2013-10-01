@@ -35,6 +35,11 @@ type Enclosure struct {
 }
 
 
+type Download struct {
+	Id int64
+	URL string
+}
+
 func setupDatabase () {
 	conn, _ := sqlite3.Open("podcast.db")
 	defer conn.Close()
@@ -50,18 +55,11 @@ func setupDatabase () {
 }
 
 
-func getNewDownloads () {
+func updateItems () {
 	var feed_count int
 
 	items := make([]Item, 0)
 	feed_responses := make(chan []Item)
-
-	/* */
-	var download_count int
-	dl_success := make(chan int64)
-	dl_failure := make(chan bool)
-	successes := make([]int64, 0)
-	/* */
 
 	conn, _ := sqlite3.Open("podcast.db")
 	defer conn.Close()
@@ -85,47 +83,13 @@ func getNewDownloads () {
 
 	log.Printf("items found: %v", len(items))
 
-	/* /
+	/* */
 	for _, item := range items {
 		conn.Exec("INSERT OR IGNORE INTO items (url) VALUES (?)", item.Enclosure.URL)
 	}
 	/* */
 
 	conn.Commit()
-
-	/* */
-	for i, err := conn.Query("SELECT url, id FROM items WHERE downloaded = 0"); err == nil; err = i.Next() {
-		i.Scan(row)
-		download_count++
-
-		go downloadEnclosure(row["url"].(string), row["id"].(int64), dl_success, dl_failure)
-	}
-
-	log.Printf("downloads found: %v", download_count)
-
-	for d_index := 0; d_index < download_count; d_index++ {
-		select {
-			case int := <-dl_success:
-				successes = append(successes, int)
-			case <-dl_failure:
-		}
-	}
-
-	log.Printf("successful ids: %v", successes)
-	id_list := make([]string, 0)
-	for _, id := range successes {
-		id_list = append(id_list, strconv.FormatInt(id, 10))
-	}
-
-	log.Printf("id list: %v", id_list)
-	log.Printf("id list joined: %v", strings.Join(id_list, ","))
-
-	id_err := conn.Exec("UPDATE items SET downloaded = 1 WHERE id IN (?)", strings.Join(id_list, ","))
-
-	log.Printf("id_err: %v", id_err)
-	conn.Commit()
-
-	/* */
 }
 
 func updateFeed (url string, returnchan chan []Item) {
@@ -148,32 +112,93 @@ func updateFeed (url string, returnchan chan []Item) {
 	returnchan <- rss.Channel.ItemList
 }
 
-func downloadEnclosure (url string, id int64, successchan chan int64, failurechan chan bool) {
-	resp, err := http.Get(url)
+func downloadItems () {
+	success := make(chan int64)
+	failure := make(chan bool)
+	downloads := make([]*Download, 0)
+	success_ids := make([]int64, 0)
+
+	conn, _ := sqlite3.Open("podcast.db")
+	defer conn.Close()
+
+	row := make(sqlite3.RowMap)
+
+	for i, err := conn.Query("SELECT url, id FROM items WHERE downloaded = 0"); err == nil; err = i.Next() {
+		i.Scan(row)
+		downloads = append(downloads, &Download{ Id: row["id"].(int64), URL: row["url"].(string) })
+	}
+
+	log.Printf("urls: %v", downloads)
+	download_limit := len(downloads)
+
+	for i := 0; i < MAX_DOWNLOADS; i++ {
+		var d *Download
+		d, downloads = pop(downloads)
+		go downloadEnclosure(d, success, failure);
+	}
+
+	for n := 0; n < download_limit; n++ {
+		select {
+			case id := <-success:
+				success_ids = append(success_ids, id)
+			case <-failure:
+		}
+
+		if len(downloads) != 0 {
+			var d *Download
+			d, downloads = pop(downloads)
+			go downloadEnclosure(d, success, failure)
+		}
+
+		log.Print("got result, looping...")
+	}
+
+	log.Printf("successful ids: %v", success_ids)
+	id_list := make([]string, 0)
+	for _, id := range success_ids {
+		id_list = append(id_list, strconv.FormatInt(id, 10))
+	}
+
+	log.Printf("id list: %v", id_list)
+	log.Printf("id list joined: %v", strings.Join(id_list, ","))
+
+	id_err := conn.Exec("UPDATE items SET downloaded = 1 WHERE id IN (?)", strings.Join(id_list, ","))
+
+	log.Printf("id_err: %v", id_err)
+	conn.Commit()
+}
+
+func pop (list []*Download) (*Download, []*Download) {
+	return list[len(list)-1], list[:len(list)-1]
+}
+
+func downloadEnclosure (d *Download, success chan int64, failure chan bool) {
+	resp, err := http.Get(d.URL)
 	defer resp.Body.Close()
 
-	log.Printf("downloading: %v", url)
+	log.Printf("downloading: %v", d.URL)
 
 	if err != nil {
-		failurechan <- true
+		failure <- true
 		return
 	}
 
-	_, filename := path.Split(url)
+	_, filename := path.Split(d.URL)
 	out, _ := os.Create(filename)
 	defer out.Close()
 
 	_, dl_err := io.Copy(out, resp.Body)
 
 	if dl_err != nil {
-		failurechan <- true
+		failure <- true
 		return
 	}
 
-	successchan <- id
+	success <- d.Id
 }
 
 func main () {
 	// setupDatabase()
-	getNewDownloads()
+	// updateItems()
+	downloadItems()
 }
