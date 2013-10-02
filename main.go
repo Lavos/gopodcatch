@@ -48,8 +48,18 @@ func setupDatabase() {
 	conn.Exec("CREATE TABLE feeds (id INTEGER PRIMARY KEY ASC, name TEXT, url TEXT)")
 	conn.Exec("CREATE TABLE items (id INTEGER PRIMARY KEY ASC, url TEXT UNIQUE ON CONFLICT IGNORE, downloaded INTEGER DEFAULT 0)")
 
+	conn.Exec("CREATE INDEX IF NOT EXISTS urls ON items (url)")
+
 	conn.Exec("INSERT INTO feeds (name, url) VALUES ('Retronauts', 'http://retronauts.libsyn.com/rss')")
 	conn.Exec("INSERT INTO feeds (name, url) VALUES ('In-Game Chat', 'http://www.ingamechat.net/?feed=podcast')")
+	conn.Exec("INSERT INTO feeds (name, url) VALUES ('Giant Bombcast', 'http://www.giantbomb.com/podcast-xml/giant-bombcast/')")
+	conn.Exec("INSERT INTO feeds (name, url) VALUES ('Weekend Confirmed', 'http://www.shacknews.com/extras/podcast/weekendconfirmed.xml')")
+	conn.Exec("INSERT INTO feeds (name, url) VALUES ('The Game Informer Show', 'http://feeds.feedburner.com/gameinformershow')")
+	conn.Exec("INSERT INTO feeds (name, url) VALUES ('Gamers with Jobs', 'http://www.gamerswithjobs.com/taxonomy/term/408/0/feed')")
+	conn.Exec("INSERT INTO feeds (name, url) VALUES ('8-4 Play', 'http://eightfour.libsyn.com/rss')")
+	conn.Exec("INSERT INTO feeds (name, url) VALUES ('PC Gamer Podcast', 'http://www.pcgamer.com/feed/')")
+
+
 	conn.Commit()
 }
 
@@ -85,7 +95,9 @@ func updateItems() {
 	log.Printf("items found: %v", len(items))
 
 	for _, item := range items {
-		conn.Exec("INSERT items (url) VALUES (?)", item.Enclosure.URL)
+		log.Printf("insert item: %v", item)
+		i_err := conn.Exec("INSERT INTO items (url) VALUES (?)", item.Enclosure.URL)
+		log.Printf("i_err: %v", i_err)
 	}
 
 	conn.Commit()
@@ -205,5 +217,5 @@ func downloadEnclosure(d Download, success chan int64, failure chan bool) {
 func main() {
 	// setupDatabase()
 	updateItems()
-	downloadItems()
+	// downloadItems()
 }
