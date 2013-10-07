@@ -11,6 +11,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -28,10 +29,18 @@ type Channel struct {
 
 type Item struct {
 	Enclosure Enclosure `xml:"enclosure"`
+	PubDate string `xml:"pubDate"`
 }
 
 type Enclosure struct {
 	URL string `xml:"url,attr"`
+}
+
+
+// communication types
+type FeedUpdate struct {
+	Id int64
+	Items []Item
 }
 
 type Download struct {
@@ -46,7 +55,7 @@ func setupDatabase() {
 	conn.Exec("DROP TABLE IF EXISTS feeds")
 	conn.Exec("DROP TABLE IF EXISTS items")
 	conn.Exec("CREATE TABLE feeds (id INTEGER PRIMARY KEY ASC, name TEXT, url TEXT)")
-	conn.Exec("CREATE TABLE items (id INTEGER PRIMARY KEY ASC, url TEXT UNIQUE ON CONFLICT IGNORE, downloaded INTEGER DEFAULT 0)")
+	conn.Exec("CREATE TABLE items (id INTEGER PRIMARY KEY ASC, feed INTEGER, url TEXT UNIQUE ON CONFLICT IGNORE, pubdate INTEGER, downloaded INTEGER DEFAULT 0)")
 
 	conn.Exec("CREATE INDEX IF NOT EXISTS urls ON items (url)")
 
@@ -57,16 +66,15 @@ func setupDatabase() {
 	conn.Exec("INSERT INTO feeds (name, url) VALUES ('The Game Informer Show', 'http://feeds.feedburner.com/gameinformershow')")
 	conn.Exec("INSERT INTO feeds (name, url) VALUES ('Gamers with Jobs', 'http://www.gamerswithjobs.com/taxonomy/term/408/0/feed')")
 	conn.Exec("INSERT INTO feeds (name, url) VALUES ('8-4 Play', 'http://eightfour.libsyn.com/rss')")
-	conn.Exec("INSERT INTO feeds (name, url) VALUES ('PC Gamer Podcast', 'http://www.pcgamer.com/feed/')")
-
+	// conn.Exec("INSERT INTO feeds (name, url) VALUES ('PC Gamer Podcast', 'http://www.pcgamer.com/feed/')")
 
 	conn.Commit()
 }
 
 func updateItems() {
 	feed_count := 0
-	items := make([]Item, 0)
-	success := make(chan []Item)
+	items := make(map[int64][]Item)
+	success := make(chan FeedUpdate)
 	failure := make(chan bool)
 
 	conn, _ := sqlite3.Open("podcast.db")
@@ -74,36 +82,58 @@ func updateItems() {
 
 	row := make(sqlite3.RowMap)
 
-	for s, err := conn.Query("SELECT url FROM feeds"); err == nil; err = s.Next() {
+	for s, err := conn.Query("SELECT id, url FROM feeds"); err == nil; err = s.Next() {
 		s.Scan(row)
 
 		feed_count++
-		go updateFeed(row["url"].(string), success, failure)
+		go updateFeed(row["id"].(int64), row["url"].(string), success, failure)
 	}
 
 	log.Printf("feeds found: %v", feed_count)
 
 	for index := 0; index < feed_count; index++ {
 		select {
-		case new_items := <-success:
-			log.Printf("got new items: %v", new_items)
-			items = append(items, new_items...)
+		case update := <-success:
+			log.Printf("got new items: %v", update)
+			items[update.Id] = update.Items
 		case <-failure:
 		}
 	}
 
 	log.Printf("items found: %v", len(items))
 
-	for _, item := range items {
-		log.Printf("insert item: %v", item)
-		i_err := conn.Exec("INSERT INTO items (url) VALUES (?)", item.Enclosure.URL)
-		log.Printf("i_err: %v", i_err)
+	for id, itemlist := range items {
+		for _, item := range itemlist {
+			var pubdate time.Time
+			var err error
+
+			pubdate, err = time.Parse(time.RFC1123, item.PubDate)
+
+			if err != nil {
+				log.Printf("[date parse error] %#v", err)
+				pubdate, err = time.Parse(time.RFC1123Z, item.PubDate)
+
+				if err != nil {
+					log.Printf("[date parse error 2] %#v", err)
+					pubdate = time.Now()
+				}
+			}
+
+			args := sqlite3.NamedArgs{
+				"$id": id,
+				"$url": item.Enclosure.URL,
+				"$pubdate": pubdate.Unix(),
+			}
+
+			i_err := conn.Exec("INSERT INTO items (feed, url, pubdate) VALUES ($id, $url, $pubdate)", args)
+			log.Printf("i_err: %v", i_err)
+		}
 	}
 
 	conn.Commit()
 }
 
-func updateFeed(url string, success chan []Item, failure chan bool) {
+func updateFeed(feed int64, url string, success chan FeedUpdate, failure chan bool) {
 	resp, err := http.Get(url)
 	defer resp.Body.Close()
 
@@ -123,7 +153,7 @@ func updateFeed(url string, success chan []Item, failure chan bool) {
 		return
 	}
 
-	success <- rss.Channel.ItemList
+	success <- FeedUpdate{ feed, rss.Channel.ItemList }
 }
 
 func downloadItems() {
@@ -215,7 +245,7 @@ func downloadEnclosure(d Download, success chan int64, failure chan bool) {
 }
 
 func main() {
-	// setupDatabase()
+	setupDatabase()
 	updateItems()
 	// downloadItems()
 }
