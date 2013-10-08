@@ -18,6 +18,14 @@ const (
 	MAX_DOWNLOADS = 3
 )
 
+var (
+	date_formats = []string{
+		time.RFC1123,
+		time.RFC1123Z,
+		time.RFC3339,
+	}
+)
+
 // RSS xml parsing types
 type RSS struct {
 	Channel Channel `xml:"channel"`
@@ -48,7 +56,7 @@ type Download struct {
 	URL string
 }
 
-func setupDatabase() {
+func setupDatabase () {
 	conn, _ := sqlite3.Open("podcast.db")
 	defer conn.Close()
 
@@ -71,7 +79,7 @@ func setupDatabase() {
 	conn.Commit()
 }
 
-func updateItems() {
+func updateItems () {
 	feed_count := 0
 	items := make(map[int64][]Item)
 	success := make(chan FeedUpdate)
@@ -104,25 +112,10 @@ func updateItems() {
 
 	for id, itemlist := range items {
 		for _, item := range itemlist {
-			var pubdate time.Time
-			var err error
-
-			pubdate, err = time.Parse(time.RFC1123, item.PubDate)
-
-			if err != nil {
-				log.Printf("[date parse error] %#v", err)
-				pubdate, err = time.Parse(time.RFC1123Z, item.PubDate)
-
-				if err != nil {
-					log.Printf("[date parse error 2] %#v", err)
-					pubdate = time.Now()
-				}
-			}
-
 			args := sqlite3.NamedArgs{
 				"$id": id,
 				"$url": item.Enclosure.URL,
-				"$pubdate": pubdate.Unix(),
+				"$pubdate": parseDate(item.PubDate).Unix(),
 			}
 
 			i_err := conn.Exec("INSERT INTO items (feed, url, pubdate) VALUES ($id, $url, $pubdate)", args)
@@ -133,7 +126,19 @@ func updateItems() {
 	conn.Commit()
 }
 
-func updateFeed(feed int64, url string, success chan FeedUpdate, failure chan bool) {
+func parseDate (date_string string) time.Time {
+	for _, f := range date_formats {
+		pubdate, err := time.Parse(f, date_string)
+
+		if err == nil {
+			return pubdate;
+		}
+	}
+
+	return time.Now()
+}
+
+func updateFeed (feed int64, url string, success chan FeedUpdate, failure chan bool) {
 	resp, err := http.Get(url)
 	defer resp.Body.Close()
 
@@ -156,7 +161,7 @@ func updateFeed(feed int64, url string, success chan FeedUpdate, failure chan bo
 	success <- FeedUpdate{ feed, rss.Channel.ItemList }
 }
 
-func downloadItems() {
+func downloadItems () {
 	success := make(chan int64)
 	failure := make(chan bool)
 	downloads := make([]Download, 0)
@@ -215,11 +220,11 @@ func downloadItems() {
 	conn.Commit()
 }
 
-func pop(list []Download) (Download, []Download) {
+func pop (list []Download) (Download, []Download) {
 	return list[len(list)-1], list[:len(list)-1]
 }
 
-func downloadEnclosure(d Download, success chan int64, failure chan bool) {
+func downloadEnclosure (d Download, success chan int64, failure chan bool) {
 	resp, err := http.Get(d.URL)
 	defer resp.Body.Close()
 
@@ -244,7 +249,7 @@ func downloadEnclosure(d Download, success chan int64, failure chan bool) {
 	success <- d.Id
 }
 
-func main() {
+func main () {
 	setupDatabase()
 	updateItems()
 	// downloadItems()
