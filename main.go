@@ -177,15 +177,23 @@ func downloadItems () {
 		downloads = append(downloads, Download{Id: row["id"].(int64), URL: row["url"].(string)})
 	}
 
-	log.Printf("urls: %v", downloads)
 	download_limit := len(downloads)
+	log.Printf("items to download: %v", download_limit)
 
 	if download_limit == 0 {
 		log.Print("No new items found.")
 		return
 	}
 
-	for i := 0; i < MAX_DOWNLOADS; i++ {
+	var init_max int
+
+	if download_limit < MAX_DOWNLOADS {
+		init_max = download_limit
+	} else {
+		init_max = MAX_DOWNLOADS
+	}
+
+	for i := 0; i < init_max; i++ {
 		var d Download
 		d, downloads = pop(downloads)
 		go downloadEnclosure(d, success, failure)
@@ -250,7 +258,7 @@ func downloadEnclosure (d Download, success chan int64, failure chan bool) {
 }
 
 func main () {
-	setupDatabase()
+	// setupDatabase()
 	updateItems()
-	// downloadItems()
+	downloadItems()
 }
